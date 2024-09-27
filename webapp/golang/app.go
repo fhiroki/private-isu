@@ -27,6 +27,7 @@ import (
 var (
 	db    *sqlx.DB
 	store *gsm.MemcacheStore
+	mc    *memcache.Client
 )
 
 const (
@@ -74,6 +75,7 @@ func init() {
 	memcacheClient := memcache.New(memdAddr)
 	store = gsm.NewMemcacheStore(memcacheClient, "iscogram_", []byte("sendagaya"))
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	mc = memcache.New(memdAddr)
 }
 
 func dbInitialize() {
@@ -173,11 +175,30 @@ func getFlash(w http.ResponseWriter, r *http.Request, key string) string {
 
 func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, error) {
 	var posts []Post
+	userIDs := make([]int, 0, len(results))
+	for _, p := range results {
+		userIDs = append(userIDs, p.UserID)
+	}
+	users := preloadUsers(userIDs)
 
 	for _, p := range results {
-		err := db.Get(&p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
-		if err != nil {
+		key := fmt.Sprintf("comments.%d.count", p.ID)
+		val, err := mc.Get(key)
+		if err != nil && err != memcache.ErrCacheMiss {
 			return nil, err
+		}
+		if err == memcache.ErrCacheMiss {
+			err = db.Get(&p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
+			if err != nil {
+				return nil, err
+			}
+
+			err = mc.Set(&memcache.Item{Key: key, Value: []byte(strconv.Itoa(p.CommentCount)), Expiration: 10})
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			p.CommentCount, _ = strconv.Atoi(string(val.Value))
 		}
 
 		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
@@ -191,10 +212,7 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 		}
 
 		for i := 0; i < len(comments); i++ {
-			err := db.Get(&comments[i].User, "SELECT * FROM `users` WHERE `id` = ?", comments[i].UserID)
-			if err != nil {
-				return nil, err
-			}
+			comments[i].User = users[comments[i].UserID]
 		}
 
 		// reverse
@@ -220,6 +238,29 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 	}
 
 	return posts, nil
+}
+
+func preloadUsers(ids []int) map[int]User {
+	users := map[int]User{}
+	if len(ids) == 0 {
+		return users
+	}
+
+	query, params, err := sqlx.In("SELECT * FROM `users` WHERE `id` IN (?)", ids)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	us := []User{}
+	err = db.Select(&us, query, params...)
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, u := range us {
+		users[u.ID] = u
+	}
+
+	return users
 }
 
 func imageURL(p Post) string {
@@ -386,7 +427,7 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 
 	results := []Post{}
 
-	err := db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC")
+	err := db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` FORCE INDEX (`posts_order_idx`)")
 	if err != nil {
 		log.Print(err)
 		return
@@ -815,7 +856,7 @@ func main() {
 	}
 
 	dsn := fmt.Sprintf(
-		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local",
+		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local&interpolateParams=true",
 		user,
 		password,
 		host,
