@@ -1,9 +1,14 @@
 package main
 
 import (
+	"bytes"
 	crand "crypto/rand"
 	"fmt"
 	"html/template"
+	"image"
+	"image/gif"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"log"
 	"net/http"
@@ -732,7 +737,34 @@ func getImage(w http.ResponseWriter, r *http.Request) {
 		ext == "png" && post.Mime == "image/png" ||
 		ext == "gif" && post.Mime == "image/gif" {
 		w.Header().Set("Content-Type", post.Mime)
-		_, err := w.Write(post.Imgdata)
+		_, err = w.Write(post.Imgdata)
+		if err != nil {
+			log.Print(err)
+			return
+		}
+
+		// save image to disk
+		path := fmt.Sprintf("/home/isucon/private_isu/webapp/public/image/%d.%s", pid, ext)
+		file, err := os.Create(path)
+		if err != nil {
+			log.Print(err)
+			return
+		}
+		err = os.Chmod(path, 0644)
+		if err != nil {
+			log.Print(err)
+			return
+		}
+		defer file.Close()
+		img, _, err := image.Decode(bytes.NewReader(post.Imgdata))
+
+		if ext == "jpg" {
+			err = jpeg.Encode(file, img, nil)
+		} else if ext == "png" {
+			err = png.Encode(file, img)
+		} else if ext == "gif" {
+			err = gif.Encode(file, img, nil)
+		}
 		if err != nil {
 			log.Print(err)
 			return
