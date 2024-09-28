@@ -186,8 +186,8 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 		comment_key := fmt.Sprintf("comments.%d.%t", p.ID, allComments)
 		comments_keys = append(comments_keys, comment_key)
 	}
-	comments_count_cached, _ := mc.GetMulti(comments_keys)
-	comments_cached, _ := mc.GetMulti(comments_count_keys)
+	comments_count_cached, _ := mc.GetMulti(comments_count_keys)
+	comments_cached, _ := mc.GetMulti(comments_keys)
 
 	for _, p := range results {
 		key := fmt.Sprintf("comments.%d.count", p.ID)
