@@ -4,7 +4,6 @@ import (
 	"bytes"
 	crand "crypto/rand"
 	"crypto/sha512"
-	"encoding/gob"
 	"encoding/hex"
 	"fmt"
 	"html/template"
@@ -29,12 +28,13 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
+	"github.com/patrickmn/go-cache"
 )
 
 var (
 	db    *sqlx.DB
 	store *gsm.MemcacheStore
-	mc    *memcache.Client
+	c     *cache.Cache
 )
 
 const (
@@ -82,7 +82,7 @@ func init() {
 	memcacheClient := memcache.New(memdAddr)
 	store = gsm.NewMemcacheStore(memcacheClient, "iscogram_", []byte("sendagaya"))
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
-	mc = memcache.New(memdAddr)
+	c = cache.New(10*time.Second, 5*time.Minute)
 }
 
 func dbInitialize() {
@@ -178,36 +178,26 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 	}
 	users := preloadUsers(userIDs)
 
-	var comments_count_keys []string
-	var comments_keys []string
-	for _, p := range results {
-		comment_count_key := fmt.Sprintf("comments.%d.count", p.ID)
-		comments_count_keys = append(comments_count_keys, comment_count_key)
-		comment_key := fmt.Sprintf("comments.%d.%t", p.ID, allComments)
-		comments_keys = append(comments_keys, comment_key)
-	}
-	comments_count_cached, _ := mc.GetMulti(comments_count_keys)
-	comments_cached, _ := mc.GetMulti(comments_keys)
-
 	for _, p := range results {
 		key := fmt.Sprintf("comments.%d.count", p.ID)
-		if comments_count_cached[key] == nil {
+
+		if value, found := c.Get(key); found {
+			p.CommentCount, _ = strconv.Atoi(string(value.(int)))
+		} else {
 			err := db.Get(&p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
 			if err != nil {
 				return nil, err
 			}
 
-			err = mc.Set(&memcache.Item{Key: key, Value: []byte(strconv.Itoa(p.CommentCount)), Expiration: 10})
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			p.CommentCount, _ = strconv.Atoi(string(comments_count_cached[key].Value))
+			c.Set(key, p.CommentCount, cache.DefaultExpiration)
 		}
 
 		var comments []Comment
 		key = fmt.Sprintf("comments.%d.%t", p.ID, allComments)
-		if comments_cached[key] == nil {
+
+		if value, found := c.Get(key); found {
+			comments = *value.(*[]Comment)
+		} else {
 			query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
 			if !allComments {
 				query += " LIMIT 3"
@@ -217,23 +207,7 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 				return nil, err
 			}
 
-			var buffer bytes.Buffer
-			enc := gob.NewEncoder(&buffer)
-			err = enc.Encode(comments)
-			if err != nil {
-				panic(err)
-			}
-			err = mc.Set(&memcache.Item{Key: key, Value: buffer.Bytes(), Expiration: 10})
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			reader := bytes.NewReader(comments_cached[key].Value)
-			dec := gob.NewDecoder(reader)
-			err := dec.Decode(&comments)
-			if err != nil {
-				return nil, err
-			}
+			c.Set(key, &comments, cache.DefaultExpiration)
 		}
 
 		for i := 0; i < len(comments); i++ {

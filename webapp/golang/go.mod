@@ -1,6 +1,6 @@
 module github.com/catatsuy/private-isu/webapp/golang
 
-go 1.23
+go 1.23.0
 
 require (
 	github.com/bradfitz/gomemcache v0.0.0-20230905024940-24af94b03874
@@ -15,4 +15,5 @@ require (
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/memcachier/mc/v3 v3.0.3 // indirect
+	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 )
