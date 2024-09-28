@@ -178,14 +178,21 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 	}
 	users := preloadUsers(userIDs)
 
+	var comments_count_keys []string
+	var comments_keys []string
+	for _, p := range results {
+		comment_count_key := fmt.Sprintf("comments.%d.count", p.ID)
+		comments_count_keys = append(comments_count_keys, comment_count_key)
+		comment_key := fmt.Sprintf("comments.%d.%t", p.ID, allComments)
+		comments_keys = append(comments_keys, comment_key)
+	}
+	comments_count_cached, _ := mc.GetMulti(comments_keys)
+	comments_cached, _ := mc.GetMulti(comments_count_keys)
+
 	for _, p := range results {
 		key := fmt.Sprintf("comments.%d.count", p.ID)
-		val, err := mc.Get(key)
-		if err != nil && err != memcache.ErrCacheMiss {
-			return nil, err
-		}
-		if err == memcache.ErrCacheMiss {
-			err = db.Get(&p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
+		if comments_count_cached[key] == nil {
+			err := db.Get(&p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
 			if err != nil {
 				return nil, err
 			}
@@ -195,28 +202,24 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 				return nil, err
 			}
 		} else {
-			p.CommentCount, _ = strconv.Atoi(string(val.Value))
+			p.CommentCount, _ = strconv.Atoi(string(comments_count_cached[key].Value))
 		}
 
 		var comments []Comment
 		key = fmt.Sprintf("comments.%d.%t", p.ID, allComments)
-		val, err = mc.Get(key)
-		if err != nil && err != memcache.ErrCacheMiss {
-			return nil, err
-		}
-		if err == memcache.ErrCacheMiss {
+		if comments_cached[key] == nil {
 			query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
 			if !allComments {
 				query += " LIMIT 3"
 			}
-			err = db.Select(&comments, query, p.ID)
+			err := db.Select(&comments, query, p.ID)
 			if err != nil {
 				return nil, err
 			}
 
 			var buffer bytes.Buffer
 			enc := gob.NewEncoder(&buffer)
-			err := enc.Encode(comments)
+			err = enc.Encode(comments)
 			if err != nil {
 				panic(err)
 			}
@@ -225,9 +228,9 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 				return nil, err
 			}
 		} else {
-			reader := bytes.NewReader(val.Value)
+			reader := bytes.NewReader(comments_cached[key].Value)
 			dec := gob.NewDecoder(reader)
-			err = dec.Decode(&comments)
+			err := dec.Decode(&comments)
 			if err != nil {
 				return nil, err
 			}
