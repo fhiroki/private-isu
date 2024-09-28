@@ -4,7 +4,6 @@ import (
 	"bytes"
 	crand "crypto/rand"
 	"crypto/sha512"
-	"encoding/hex"
 	"fmt"
 	"html/template"
 	"image"
@@ -121,9 +120,8 @@ func validateUser(accountName, password string) bool {
 func digest(src string) string {
 	s := sha512.New()
 	s.Write([]byte(src))
-	out := hex.EncodeToString(s.Sum(nil))
 
-	return strings.TrimSuffix(string(out), "\n")
+	return fmt.Sprintf("%x", s.Sum(nil))
 }
 
 func calculateSalt(accountName string) string {
