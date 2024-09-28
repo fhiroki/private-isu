@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	crand "crypto/rand"
+	"encoding/gob"
 	"fmt"
 	"html/template"
 	"image"
@@ -206,14 +207,44 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 			p.CommentCount, _ = strconv.Atoi(string(val.Value))
 		}
 
-		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
-		if !allComments {
-			query += " LIMIT 3"
-		}
 		var comments []Comment
-		err = db.Select(&comments, query, p.ID)
-		if err != nil {
-			return nil, err
+		if allComments {
+			query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
+			err = db.Select(&comments, query, p.ID)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			key = fmt.Sprintf("comments.%d", p.ID)
+			val, err = mc.Get(key)
+			if err != nil && err != memcache.ErrCacheMiss {
+				return nil, err
+			}
+			if err == memcache.ErrCacheMiss {
+				query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC LIMIT 3"
+				err = db.Select(&comments, query, p.ID)
+				if err != nil {
+					return nil, err
+				}
+
+				var buffer bytes.Buffer
+				enc := gob.NewEncoder(&buffer)
+				err := enc.Encode(comments)
+				if err != nil {
+					panic(err)
+				}
+				err = mc.Set(&memcache.Item{Key: key, Value: buffer.Bytes(), Expiration: 10})
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				reader := bytes.NewReader(val.Value)
+				dec := gob.NewDecoder(reader)
+				err = dec.Decode(&comments)
+				if err != nil {
+					return nil, err
+				}
+			}
 		}
 
 		for i := 0; i < len(comments); i++ {
