@@ -208,42 +208,37 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 		}
 
 		var comments []Comment
-		if allComments {
+		key = fmt.Sprintf("comments.%d.%t", p.ID, allComments)
+		val, err = mc.Get(key)
+		if err != nil && err != memcache.ErrCacheMiss {
+			return nil, err
+		}
+		if err == memcache.ErrCacheMiss {
 			query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
+			if !allComments {
+				query += " LIMIT 3"
+			}
 			err = db.Select(&comments, query, p.ID)
 			if err != nil {
 				return nil, err
 			}
-		} else {
-			key = fmt.Sprintf("comments.%d", p.ID)
-			val, err = mc.Get(key)
-			if err != nil && err != memcache.ErrCacheMiss {
+
+			var buffer bytes.Buffer
+			enc := gob.NewEncoder(&buffer)
+			err := enc.Encode(comments)
+			if err != nil {
+				panic(err)
+			}
+			err = mc.Set(&memcache.Item{Key: key, Value: buffer.Bytes(), Expiration: 10})
+			if err != nil {
 				return nil, err
 			}
-			if err == memcache.ErrCacheMiss {
-				query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC LIMIT 3"
-				err = db.Select(&comments, query, p.ID)
-				if err != nil {
-					return nil, err
-				}
-
-				var buffer bytes.Buffer
-				enc := gob.NewEncoder(&buffer)
-				err := enc.Encode(comments)
-				if err != nil {
-					panic(err)
-				}
-				err = mc.Set(&memcache.Item{Key: key, Value: buffer.Bytes(), Expiration: 10})
-				if err != nil {
-					return nil, err
-				}
-			} else {
-				reader := bytes.NewReader(val.Value)
-				dec := gob.NewDecoder(reader)
-				err = dec.Decode(&comments)
-				if err != nil {
-					return nil, err
-				}
+		} else {
+			reader := bytes.NewReader(val.Value)
+			dec := gob.NewDecoder(reader)
+			err = dec.Decode(&comments)
+			if err != nil {
+				return nil, err
 			}
 		}
 
