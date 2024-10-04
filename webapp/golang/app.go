@@ -118,10 +118,7 @@ func validateUser(accountName, password string) bool {
 }
 
 func digest(src string) string {
-	s := sha512.New()
-	s.Write([]byte(src))
-
-	return fmt.Sprintf("%x", s.Sum(nil))
+	return fmt.Sprintf("%x", sha512.Sum512([]byte(src)))
 }
 
 func calculateSalt(accountName string) string {
